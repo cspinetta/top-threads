@@ -2,41 +2,44 @@
 import os
 import re
 import sys
+
 import subprocess
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number] [show inactive threads True | False]\nOnly parameter [pid] is mandatory.".format(sys.argv[0]))
+        print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
+              "Only parameter [pid] is mandatory.".format(sys.argv[0]))
         exit(1)
     pid = sys.argv[1]
     max_stack_depth = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     top_num = int(int(sys.argv[3])) if len(sys.argv) > 3 else 10
-    show_inactive = int(bool(sys.argv[4])) if len(sys.argv) > 4 else False
-    print("Generating thread stats for Java Process {}".format(pid))
-    calculate_thread_stats(pid, max_stack_depth, top_num, show_inactive)
+    print("Generating thread stats for Java Process {}\n\n".format(pid))
+    calculate_thread_stats(pid, max_stack_depth, top_num)
 
 
-def calculate_thread_stats(pid, max_stack_depth, top_num, show_inactives):
-    stats_tid, inactive_threads = process_stat(pid, show_inactives)
+def calculate_thread_stats(pid, max_stack_depth, top_num):
+    stats_tid, inactive_threads = process_stat(pid)
     thread_by_tid = stack_info(pid, max_stack_depth)
     stats_sorted_by_cpu = sorted(stats_tid.items(), key=lambda x: x[1]['total_cpu'], reverse=True)
     top_n_stats = stats_sorted_by_cpu if top_num < 0 else stats_sorted_by_cpu[0:top_num]
     for tid, stats in top_n_stats:
-        print("Thread {} | CPU #{} Total: {}% [%usr: {}%, %system: {}%, %guest: {}%, %wait: {}%] | I/O [kB_rd/s: {}, "
-              "kB_wr/s: {}]. Info:\n{}\n"
-              .format(tid, stats['cpu'], stats['total_cpu'], stats['user_cpu'], stats['system_cpu'], stats['guest_cpu'],
-                      stats['wait_cpu'], stats['kb_rd_per_sec'], stats['kb_wr_per_sec'],
-                      thread_by_tid.get(tid, "- No info provided -")))
-    if show_inactives is False:
-        print("Inactive threads: {}".format(", ".join(inactive_threads)))
+        print(
+            "Thread {} attached in CPU #{}\n"
+            "{:3.2f}% CPU [%usr: {:3.2f}, %system: {:3.2f}, %guest: {:3.2f}, %wait: {:3.2f}]\n"
+            "I/O [kB_rd/s: {}, kB_wr/s: {}]\n"
+            "{}\n\n"
+            .format(tid, stats['cpu'], stats['total_cpu'], stats['user_cpu'], stats['system_cpu'],
+                    stats['guest_cpu'], stats['wait_cpu'], stats['kb_rd_per_sec'], stats['kb_wr_per_sec'],
+                    thread_by_tid.get(tid, "- No info provided -")))
+    print("These threads seem to be inactive (CPU 0%): {}".format(", ".join(inactive_threads)))
 
 
-def process_stat(pid, show_inactives):
+def process_stat(pid):
     stats_tid = {}
     pidstat_env = os.environ.copy()
     pidstat_env['S_COLORS'] = "never"
-    out = subprocess.Popen(["pidstat", "-u", "-d", "-H", "-t", "-h", "-p", pid],
+    out = subprocess.Popen(["pidstat", "-u", "-d", "-H", "-t", "-h", "-p", pid, "1", "1"],
                            stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT,
                            env=pidstat_env)
@@ -59,13 +62,10 @@ def process_stat(pid, show_inactives):
                 'kb_rd_per_sec': float(values[20]),
                 'kb_wr_per_sec': float(values[22]),
             }
-            if show_inactives:
+            if stats['total_cpu'] > 0.0:
                 stats_tid[thread_id] = stats
             else:
-                if stats['total_cpu'] > 0.0:
-                    stats_tid[thread_id] = stats
-                else:
-                    inactive_threads.append(str(thread_id))
+                inactive_threads.append(str(thread_id))
     return stats_tid, inactive_threads
 
 
@@ -79,10 +79,7 @@ def stack_info(pid, max_stack_depth):
             nic_result = re.search("nid=(\w*)", thread_dump)
             if nic_result is not None:
                 thread_id = int(nic_result.group(1), 16)
-                thread_by_tid[thread_id] = os.linesep.join(thread_dump.split(os.linesep)[0:(2+max_stack_depth)])
-            # print(os.linesep.join(lines[0:5]))
-        # else:
-            # print("Line with no thread info:\n{}".format(thread_dump))
+                thread_by_tid[thread_id] = os.linesep.join(thread_dump.split(os.linesep)[0:(2 + max_stack_depth)])
     return thread_by_tid
 
 
