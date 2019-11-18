@@ -12,6 +12,35 @@ TITLE_ROW = "Generating thread stats for Java Process {}".format(sys.argv[1] if 
 log = []
 
 
+
+
+def main_2():
+
+    if len(sys.argv) < 2:
+        print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
+              "Only parameter [pid] is mandatory.".format(sys.argv[0]))
+        exit(1)
+    pid = sys.argv[1]
+
+    pidstat_env = os.environ.copy()
+    pidstat_env['S_COLORS'] = "never"
+    process = subprocess.Popen(["pidstat", "-u", "-d", "-H", "-t", "-h", "-p", pid, "1"],
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT,
+                               env=pidstat_env)
+    lines = []
+    for output in iter(lambda: process.stdout.readline(), b''):
+        line = output.decode().strip()
+        if len(line) > 10:
+            print('Append nice line: {}'.format(line))
+        else:
+            print('Receive ugly line: {}'.format(line))
+            if len(lines) > 0:
+                print('going to processing')
+                # stats_display.process_stats(lines)
+            lines.clear()
+
+
 def main():
     if len(sys.argv) < 2:
         print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
@@ -89,7 +118,7 @@ class StatsDisplay:
         stdscr.move(2, 0)
 
         max_y, max_x = stdscr.getmaxyx()
-        max_lines = max_y - 10
+        max_lines = max_y - 8
 
         current_position = 2
 
@@ -144,15 +173,6 @@ class StatsDisplay:
         stdscr.addstr(os.linesep)
 
         position += 1
-        if position >= max_lines:
-            return position
-
-        stdscr.addstr(os.linesep)
-
-        position += 1
-        if position >= max_lines:
-            return position
-
         return position
 
     @staticmethod
@@ -193,9 +213,8 @@ class StatsDisplay:
                     'kb_rd_per_sec': float(values[20]),
                     'kb_wr_per_sec': float(values[22]),
                 }
-                if stats['total_cpu'] > 0.0:
-                    stats_tid[thread_id] = stats
-                else:
+                stats_tid[thread_id] = stats
+                if stats['total_cpu'] <= 0.0:
                     inactive_threads.append(str(thread_id))
         return stats_tid, inactive_threads
 
