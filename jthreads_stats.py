@@ -12,35 +12,6 @@ TITLE_ROW = "Generating thread stats for Java Process {}".format(sys.argv[1] if 
 log = []
 
 
-
-
-def main_2():
-
-    if len(sys.argv) < 2:
-        print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
-              "Only parameter [pid] is mandatory.".format(sys.argv[0]))
-        exit(1)
-    pid = sys.argv[1]
-
-    pidstat_env = os.environ.copy()
-    pidstat_env['S_COLORS'] = "never"
-    process = subprocess.Popen(["pidstat", "-u", "-d", "-H", "-t", "-h", "-p", pid, "1"],
-                               stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT,
-                               env=pidstat_env)
-    lines = []
-    for output in iter(lambda: process.stdout.readline(), b''):
-        line = output.decode().strip()
-        if len(line) > 10:
-            print('Append nice line: {}'.format(line))
-        else:
-            print('Receive ugly line: {}'.format(line))
-            if len(lines) > 0:
-                print('going to processing')
-                # stats_display.process_stats(lines)
-            lines.clear()
-
-
 def main():
     if len(sys.argv) < 2:
         print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
