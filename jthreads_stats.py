@@ -12,35 +12,31 @@ TITLE_ROW = "Generating thread stats for Java Process {}".format(sys.argv[1] if 
 log = []
 
 
-
-
-def main_2():
-
-    if len(sys.argv) < 2:
-        print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
-              "Only parameter [pid] is mandatory.".format(sys.argv[0]))
-        exit(1)
-    pid = sys.argv[1]
-
-    pidstat_env = os.environ.copy()
-    pidstat_env['S_COLORS'] = "never"
-    process = subprocess.Popen(["pidstat", "-u", "-d", "-H", "-t", "-h", "-p", pid, "1"],
-                               stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT,
-                               env=pidstat_env)
-    lines = []
-    for output in iter(lambda: process.stdout.readline(), b''):
-        line = output.decode().strip()
-        if len(line) > 10:
-            print('Append nice line: {}'.format(line))
-        else:
-            print('Receive ugly line: {}'.format(line))
-            if len(lines) > 0:
-                print('going to processing')
-                # stats_display.process_stats(lines)
-            lines.clear()
-
-
+# def main_2():
+#
+#     if len(sys.argv) < 2:
+#         print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
+#               "Only parameter [pid] is mandatory.".format(sys.argv[0]))
+#         exit(1)
+#     pid = sys.argv[1]
+#
+#     pidstat_env = os.environ.copy()
+#     pidstat_env['S_COLORS'] = "never"
+#     process = subprocess.Popen(["pidstat", "-u", "-d", "-H", "-t", "-h", "-p", pid, "1"],
+#                                stdout=subprocess.PIPE,
+#                                stderr=subprocess.STDOUT,
+#                                env=pidstat_env)
+#     lines = []
+#     for output in iter(lambda: process.stdout.readline(), b''):
+#         line = output.decode().strip()
+#         if len(line) > 10:
+#             print('Append nice line: {}'.format(line))
+#         else:
+#             print('Receive ugly line: {}'.format(line))
+#             if len(lines) > 0:
+#                 print('going to processing')
+#                 # stats_display.process_stats(lines)
+#             lines.clear()
 def main():
     if len(sys.argv) < 2:
         print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
@@ -89,8 +85,15 @@ def call_pidstat(pid, stats_display):
             lines.append(line)  # .strip()
         else:
             if len(lines) > 0:
-                stats_display.process_stats(lines)
+                stats_display.process_stats(pid, lines, calculate_sched_stats)
             lines.clear()
+
+
+def calculate_sched_stats(pid, tid):
+    # stats_tid = {}
+    with open("/proc/{}/task/{}/schedstat".format(pid, tid)) as schedule_stats:
+        values = schedule_stats.read()
+        return int(values.split(" ")[1])
 
 
 class StatsDisplay:
@@ -101,14 +104,15 @@ class StatsDisplay:
         self.top_num = top_num
         self.stdscr = stdscr
 
-    def process_stats(self, stat_lines):
-        stats_tid, inactive_threads = self.scrape_stat(stat_lines)
+    def process_stats(self, pid, stat_lines, schedule_stat_fun):
+        stats_by_tid, inactive_threads = self.scrape_stat(stat_lines)
         thread_by_tid = self.stack_info()
-        stats_sorted_by_cpu = sorted(stats_tid.items(), key=lambda x: x[1]['total_cpu'], reverse=True)
+        stats_sorted_by_cpu = sorted(stats_by_tid.items(), key=lambda x: x[1]['total_cpu'], reverse=True)
         top_n_stats = stats_sorted_by_cpu if self.top_num < 0 else stats_sorted_by_cpu[0:self.top_num]
-        self.display(top_n_stats, thread_by_tid)
+        run_queue_latency_by_tid = {tid: schedule_stat_fun(pid, tid) for tid in stats_by_tid.keys()}
+        self.display(top_n_stats, thread_by_tid, run_queue_latency_by_tid)
 
-    def display(self, thread_stats, thread_by_tid):
+    def display(self, thread_stats, thread_by_tid, run_queue_latency_by_tid):
         stdscr = self.stdscr
         stdscr.scrollok(1)
         stdscr.idlok(1)
@@ -123,18 +127,25 @@ class StatsDisplay:
         current_position = 2
 
         for tid, stats in thread_stats:
-            current_position = self.next_line(current_position, max_lines, tid, stats, thread_by_tid)
+            current_position = self.next_line(current_position, max_lines, tid, stats, thread_by_tid,
+                                              run_queue_latency_by_tid)
             if current_position >= max_lines:
                 break
         stdscr.refresh()
 
-    def next_line(self, position, max_lines, tid, stats, thread_by_tid):
+    def next_line(self, position, max_lines, tid, stats, thread_by_tid, run_queue_latency_by_tid):
         stdscr = self.stdscr
 
         if position >= max_lines:
             return position
 
-        stdscr.addstr("Thread {} attached in CPU #{}".format(tid, stats['cpu']), curses.A_BOLD)
+        thread_info = thread_by_tid.get(tid, {})
+        thread_name = thread_info.get('name', "-name not found-")
+        dump = thread_info.get('dump', "- No info provided -")
+
+        stdscr.addstr("Thread [tid {} CPU #{}, Run Queue Latency {}] \"{}\""
+                      .format(tid, stats['cpu'], self.nanos_fmt(run_queue_latency_by_tid[tid]),
+                              thread_name), curses.A_BOLD)
         stdscr.addstr(os.linesep)
 
         position += 1
@@ -163,7 +174,7 @@ class StatsDisplay:
         stdscr.addstr("]")
         stdscr.addstr(os.linesep)
 
-        for line in thread_by_tid.get(tid, "- No info provided -").split(os.linesep):
+        for line in dump.split(os.linesep):
             stdscr.addstr(line)
             stdscr.addstr(os.linesep)
             position += 1
@@ -195,7 +206,7 @@ class StatsDisplay:
 
     @staticmethod
     def scrape_stat(lines):
-        stats_tid = {}
+        stats_by_tid = {}
         inactive_threads = []
         for line in lines:
             values = re.split("(\s+)", line)
@@ -213,10 +224,10 @@ class StatsDisplay:
                     'kb_rd_per_sec': float(values[20]),
                     'kb_wr_per_sec': float(values[22]),
                 }
-                stats_tid[thread_id] = stats
+                stats_by_tid[thread_id] = stats
                 if stats['total_cpu'] <= 0.0:
                     inactive_threads.append(str(thread_id))
-        return stats_tid, inactive_threads
+        return stats_by_tid, inactive_threads
 
     def stack_info(self):
         thread_by_tid = {}
@@ -225,11 +236,33 @@ class StatsDisplay:
         thread_dumps = stdout.decode().split(os.linesep + os.linesep)
         for thread_dump in thread_dumps:
             if "tid=" in thread_dump:
-                nic_result = re.search("nid=(\w*)", thread_dump)
-                if nic_result is not None:
-                    thread_id = int(nic_result.group(1), 16)
-                    thread_by_tid[thread_id] = os.linesep.join(thread_dump.split(os.linesep)[0:(2 + self.max_stack_depth)])
+                tid_result = re.search("nid=(\w*)", thread_dump)
+                if tid_result is not None:
+                    thread_id = int(tid_result.group(1), 16)
+                    name_search = thread_dump.split('"')
+                    name = name_search[1] if len(name_search) > 0 else "-name not found-"
+                    dump = os.linesep.join(thread_dump.split(os.linesep)[0:(2 + self.max_stack_depth)])
+                    thread_by_tid[thread_id] = {
+                        'name': name,
+                        'dump': dump,
+                    }
         return thread_by_tid
+
+    @staticmethod
+    def sizeof_fmt(num, suffix='B'):
+        for unit in ['', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi']:
+            if abs(num) < 1024.0:
+                return "%3.1f%s%s" % (num, unit, suffix)
+            num /= 1024.0
+        return "%.1f%s%s" % (num, 'Yi', suffix)
+
+    @staticmethod
+    def nanos_fmt(num):
+        for unit in [' nanos', ' micros', ' millis']:
+            if abs(num) < 1000.0:
+                return "%3.1f%s" % (num, unit)
+            num /= 1000.0
+        return "%.1f%s" % (num, ' seconds')
 
 
 if __name__ == '__main__':
