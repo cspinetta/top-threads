@@ -6,24 +6,71 @@ import sys
 import subprocess
 import curses
 import traceback
+import argparse
 from curses import wrapper
 
 
-TITLE_ROW = "Generating thread stats for Java Process {}".format(sys.argv[1] if len(sys.argv) > 1 else "-")
 log = []
 pid = 0
+sample_count = 0
 
 
 def main():
     global pid
-    if len(sys.argv) < 2:
-        print("Missing parameters.\nUsage: {} {{pid}} [max_stack_depth] [top number]\n"
-              "Only parameter [pid] is mandatory.".format(sys.argv[0]))
-        exit(1)
-    pid = sys.argv[1]
-    max_stack_depth = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-    top_num = int(int(sys.argv[3])) if len(sys.argv) > 3 else 10
+    parser = create_parser()
+    args = parser.parse_args()
+    pid = args.pid
+    if args.display_type == 'fancy':
+        wrapper(run_fancy_view(Params(args.stack_size, args.number, args.sort_field, args.jstack_enabled)))
+    else:
+        run_terminal_view(Params(args.stack_size, args.number, args.sort_field, args.jstack_enabled))
 
+
+def create_parser():
+    parser = argparse.ArgumentParser(description='Process for analysing Java Threads')
+    parser.add_argument('-p', required=True,
+                        type=int, dest='pid',
+                        help='Process ID')
+    parser.add_argument('-n', nargs='?', dest='number',
+                        type=int, default=10,
+                        help='Number of threads to show by sample')
+    parser.add_argument('--max-stack-depth', '-m', nargs='?',
+                        type=int, default=1, dest='stack_size',
+                        help='Max number of stack frames')
+    parser.add_argument('--sort', '-s', nargs='?', dest='sort_field',
+                        choices=['cpu', 'disk', 'rq'], default='cpu',
+                        help='field used for sorting')
+    parser.add_argument('--display', '-d', nargs='?', dest='display_type',
+                        choices=['terminal', 'fancy'], default='terminal',
+                        help='Select the way to display the info: terminal or fancy')
+    parser.add_argument('--no-jstack', dest='jstack_enabled',
+                        action="store_false",
+                        help='Turn off usage of jstack to retrieve thread info like name and stack')
+    return parser
+
+
+def title_row():
+    return "Generating thread stats for Java Process {}".format(pid)
+
+
+def run_terminal_view(params):
+    exc = None
+    try:
+
+        # print("Generating thread stats for Java Process {}\n\n".format(pid))
+        stats_sorter = StatsSorter.by_field(params.field_sort)
+        call_pidstat(StatsProcessor(params, StatsTerminalPrinter(), stats_sorter))
+    except Exception as e:
+        exc = traceback.format_exc()
+    finally:
+        if log is not '':
+            print("Execution log:\n")
+        print("\n".join(log))
+        if exc is not None:
+            print(exc)
+
+
+def run_fancy_view(params):
     stdscr = curses.initscr()
     curses.noecho()
     curses.cbreak()
@@ -36,7 +83,8 @@ def main():
     exc = None
     try:
         # print("Generating thread stats for Java Process {}\n\n".format(pid))
-        call_pidstat(StatsProcessor(max_stack_depth, top_num, StatsPrinter(stdscr)))
+        stats_sorter = StatsSorter.by_field(params.field_sort)
+        call_pidstat(StatsProcessor(params, StatsFancyPrinter(stdscr), stats_sorter))
     except Exception as e:
         exc = traceback.format_exc()
     finally:
@@ -52,11 +100,20 @@ def log_info(msg):
     log.append(msg)
 
 
+def systat_version():
+    return subprocess.getoutput("pidstat -V | cut -d ' ' -f 3 | head -1")
+
+
 def call_pidstat(stats_processor):
     # stats_tid = {}
     pidstat_env = os.environ.copy()
     pidstat_env['S_COLORS'] = "never"
-    process = subprocess.Popen(["pidstat", "-u", "-d", "-H", "-t", "-h", "-p", pid, "1"],
+    version = systat_version().split('.')
+    fix_time_display = []
+    if len(version) > 1 and int(version[0]) >= 11 and int(version[1]) >= 6:
+        fix_time_display.append("-H")
+    args = ["pidstat", "-u", "-d", "-t", "-h"] + fix_time_display + ["-p", str(pid), "1"]
+    process = subprocess.Popen(args,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT,
                                env=pidstat_env)
@@ -69,6 +126,33 @@ def call_pidstat(stats_processor):
             if len(lines) > 0:
                 stats_processor.process_stats(lines)
             lines.clear()
+
+
+class Params:
+
+    def __init__(self, max_stack_depth, top_num, field_sort, jstack_enabled):
+        self.max_stack_depth = max_stack_depth
+        self.top_num = top_num
+        self.field_sort = field_sort
+        self.jstack_enabled = jstack_enabled
+
+
+class StatsSorter:
+
+    @staticmethod
+    def by_field(field):
+        if field == "cpu":
+            log_info('sorting by CPU')
+            return lambda x: x.thread_stats.cpu.total_cpu
+        elif field == "rq":
+            log_info('sorting by run queue latency')
+            return lambda x: x.thread_stats.scheduler_stats.delta_run_queue_latency
+        elif field == "disk":
+            log_info('sorting by Disk')
+            return lambda x: x.thread_stats.disk.kb_rd_per_sec + x.thread_stats.disk.kb_wr_per_sec
+        else:
+            log_info('sorting by default - CPU')
+            return lambda x: x.thread_stats.cpu.total_cpu
 
 
 class ThreadInfo:
@@ -128,9 +212,9 @@ class SchedulerStats:
         if on_runqueue < self.run_queue_latency:
             log_info("TID: {}, on_runqueue {} -> {} (received: {})"
                      .format(self.tid,
-                             StatsPrinter.nanos_fmt(self.run_queue_latency),
-                             StatsPrinter.nanos_fmt(on_runqueue - self.run_queue_latency),
-                             StatsPrinter.nanos_fmt(on_runqueue)))
+                             StatsFancyPrinter.nanos_fmt(self.run_queue_latency),
+                             StatsFancyPrinter.nanos_fmt(on_runqueue - self.run_queue_latency),
+                             StatsFancyPrinter.nanos_fmt(on_runqueue)))
         self.delta_spent_on_cpu = on_cpu - self.spent_on_cpu
         self.spent_on_cpu = on_cpu
         self.delta_run_queue_latency = on_runqueue - self.run_queue_latency
@@ -162,10 +246,12 @@ class StatsProcessor:
 
     threads = {}
 
-    def __init__(self, max_stack_depth, top_num, stats_printer):
-        self.max_stack_depth = max_stack_depth
-        self.top_num = top_num
+    def __init__(self, params, stats_printer, stats_sorter):
+        self.max_stack_depth = params.max_stack_depth
+        self.top_num = params.top_num
+        self.jstack_enabled = params.jstack_enabled
         self.stats_printer = stats_printer
+        self.stats_sorter = stats_sorter
 
     @staticmethod
     def get_thread(tid):
@@ -191,18 +277,17 @@ class StatsProcessor:
             if on_cpu is not None and on_runqueue is not None and timeslices is not None:
                 thread_info.thread_stats.scheduler_stats.update(on_cpu, on_runqueue, timeslices)
 
-    @staticmethod
-    def load_stack_info(thread_ids, max_stack_depth):
-        thread_info_by_id = StatsProcessor.stack_info(thread_ids, max_stack_depth)
-        for tid in thread_ids:
-            thread_dump = thread_info_by_id.get(tid, {})
-            name = thread_dump.get('name', 'no name provided')
-            dump = thread_dump.get('dump', 'no dump provided')
-            StatsProcessor.get_thread(tid).update_dump(name, dump)
+    def load_stack_info(self, thread_ids, max_stack_depth):
+        if self.jstack_enabled:
+            thread_info_by_id = StatsProcessor.stack_info(thread_ids, max_stack_depth)
+            for tid in thread_ids:
+                thread_dump = thread_info_by_id.get(tid, {})
+                name = thread_dump.get('name', 'no name provided')
+                dump = thread_dump.get('dump', 'no dump provided')
+                StatsProcessor.get_thread(tid).update_dump(name, dump)
 
-    @staticmethod
-    def threads_for_sampling(top_num):
-        t_sorted = sorted(StatsProcessor.threads.values(), key=lambda x: x.thread_stats.cpu.total_cpu, reverse=True)
+    def threads_for_sampling(self, top_num):
+        t_sorted = sorted(StatsProcessor.threads.values(), key=self.stats_sorter, reverse=True)
         t_top = t_sorted if top_num < 0 else t_sorted[0:top_num]
         return [t.tid for t in t_top]
 
@@ -219,7 +304,7 @@ class StatsProcessor:
     def stack_info(thread_ids, max_stack_depth):
         thread_set = set(thread_ids)
         thread_by_tid = {}
-        out = subprocess.Popen(["jstack", pid], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        out = subprocess.Popen(["jstack", str(pid)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         stdout, stderr = out.communicate()
         thread_dumps = stdout.decode().split(os.linesep + os.linesep)
         for thread_dump in thread_dumps:
@@ -238,7 +323,7 @@ class StatsProcessor:
         return thread_by_tid
 
 
-class StatsPrinter:
+class StatsFancyPrinter:
 
     def __init__(self, stdscr):
         self.stdscr = stdscr
@@ -248,7 +333,7 @@ class StatsPrinter:
         stdscr.scrollok(1)
         stdscr.idlok(1)
         stdscr.scroll(100)
-        stdscr.addstr(0, 0, TITLE_ROW, curses.A_BOLD)
+        stdscr.addstr(0, 0, title_row(), curses.A_BOLD)
 
         stdscr.move(2, 0)
 
@@ -372,5 +457,123 @@ class StatsPrinter:
         return "%.1f%s" % (num, ' seconds')
 
 
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
+class StatsTerminalPrinter:
+
+    def __init__(self):
+        pass
+
+    def display(self, top_n_threads):
+        global sample_count
+        sample_count += 1
+        print(StatsTerminalPrinter.colored('-------------------------- Sample #{:5d}'.format(sample_count), bcolors.HEADER))
+        print(StatsTerminalPrinter.colored(title_row(), bcolors.HEADER))
+
+        for tid in top_n_threads:
+            self.next_line(StatsProcessor.get_thread(tid))
+
+    def next_line(self, thread_info):
+        print(
+            StatsTerminalPrinter.colored(
+                "Thread [tid {} CPU #{}] \"{}\""
+                .format(thread_info.tid, thread_info.thread_stats.cpu.cpu, thread_info.name), bcolors.BOLD))
+
+        print("CPU ", end='')
+        print(StatsTerminalPrinter.colored("{:3.2f}%".format(thread_info.thread_stats.cpu.total_cpu),
+                                          self.cpu_color(thread_info.thread_stats.cpu.total_cpu)), end='')
+        print(" [%usr: ", end='')
+        print(StatsTerminalPrinter.colored("{:3.2f}".format(thread_info.thread_stats.cpu.user_cpu),
+                                          self.cpu_color(thread_info.thread_stats.cpu.user_cpu)), end='')
+        print(", %system: ", end='')
+        print(StatsTerminalPrinter.colored("{:3.2f}".format(thread_info.thread_stats.cpu.system_cpu),
+                                          self.cpu_color(thread_info.thread_stats.cpu.system_cpu)), end='')
+        print(", %guest: ", end='')
+        print(StatsTerminalPrinter.colored("{:3.2f}".format(thread_info.thread_stats.cpu.guest_cpu),
+                                          self.cpu_color(thread_info.thread_stats.cpu.guest_cpu)), end='')
+        print(", %wait: ", end='')
+        print(StatsTerminalPrinter.colored("{:3.2f}".format(thread_info.thread_stats.cpu.wait_cpu),
+                                          self.cpu_color(thread_info.thread_stats.cpu.wait_cpu)), end='')
+        print("] [spent in CPU: ", end='')
+        print("{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_spent_on_cpu)), end='')
+        print(", run-queue latency: ", end='')
+        print(StatsTerminalPrinter.colored(
+            "{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)),
+            self.latency_color(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)), end='')
+        print(", timeslices in current CPU: ", end='')
+        print("{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.timeslices_on_current_cpu)), end='')
+        print("]")
+
+        print("I/O [kB_rd/s: ", end='')
+        print(StatsTerminalPrinter.colored("{}".format(thread_info.thread_stats.disk.kb_rd_per_sec),
+                                          self.io_color(thread_info.thread_stats.disk.kb_rd_per_sec)), end='')
+        print(", kB_wr/s: ", end='')
+        print(StatsTerminalPrinter.colored("{}".format(thread_info.thread_stats.disk.kb_wr_per_sec),
+                                          self.io_color(thread_info.thread_stats.disk.kb_wr_per_sec)), end='')
+        print("]")
+
+        for line in thread_info.dump.split(os.linesep):
+            print(line)
+
+        print('')
+        return
+
+    @staticmethod
+    def colored(text, color):
+        return "{}{}{}".format(color, text, bcolors.ENDC)
+
+    @staticmethod
+    def cpu_color(value):
+        if value < 20:
+            return bcolors.OKGREEN
+        elif value < 60:
+            return bcolors.WARNING
+        else:
+            return bcolors.FAIL
+
+    @staticmethod
+    def latency_color(value):
+        if value < 10000:  # 10 microseconds
+            return bcolors.OKGREEN
+        elif value < 1000000:  # 1 millis
+            return bcolors.WARNING
+        else:
+            return bcolors.FAIL
+
+    @staticmethod
+    def io_color(value):
+        if value < 20:
+            return bcolors.OKGREEN
+        elif value < 100:
+            return bcolors.WARNING
+        else:
+            return bcolors.FAIL
+
+    @staticmethod
+    def sizeof_fmt(num, suffix='B'):
+        for unit in ['', 'Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei', 'Zi']:
+            if abs(num) < 1024.0:
+                return "%3.1f%s%s" % (num, unit, suffix)
+            num /= 1024.0
+        return "%.1f%s%s" % (num, 'Yi', suffix)
+
+    @staticmethod
+    def nanos_fmt(num):
+        for unit in [' nanos', ' micros', ' millis']:
+            if abs(num) < 1000.0:
+                return "%3.1f%s" % (num, unit)
+            num /= 1000.0
+        return "%.1f%s" % (num, ' seconds')
+
+
 if __name__ == '__main__':
-    wrapper(main())
+    main()
