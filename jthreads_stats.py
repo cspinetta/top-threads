@@ -38,7 +38,7 @@ def create_parser():
                         type=int, default=1, dest='stack_size',
                         help='Max number of stack frames')
     parser.add_argument('--sort', '-s', nargs='?', dest='sort_field',
-                        choices=['cpu', 'disk', 'rq'], default='cpu',
+                        choices=['cpu', 'rq', 'disk', 'disk-rd', 'disk-wr'], default='cpu',
                         help='field used for sorting')
     parser.add_argument('--display', '-d', nargs='?', dest='display_type',
                         choices=['terminal', 'fancy'], default='terminal',
@@ -150,6 +150,12 @@ class StatsSorter:
         elif field == "disk":
             log_info('sorting by Disk')
             return lambda x: x.thread_stats.disk.kb_rd_per_sec + x.thread_stats.disk.kb_wr_per_sec
+        elif field == "disk-rd":
+            log_info('sorting by Disk')
+            return lambda x: x.thread_stats.disk.kb_rd_per_sec
+        elif field == "disk-wr":
+            log_info('sorting by Disk')
+            return lambda x: x.thread_stats.disk.kb_wr_per_sec
         else:
             log_info('sorting by default - CPU')
             return lambda x: x.thread_stats.cpu.total_cpu
@@ -239,6 +245,8 @@ class PidStatsParser:
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.guest_cpu = float(values[12])
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.wait_cpu = float(values[14])
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.total_cpu = float(values[16])
+                StatsProcessor.get_thread(thread_id).thread_stats.disk.kb_rd_per_sec = float(values[20])
+                StatsProcessor.get_thread(thread_id).thread_stats.disk.kb_wr_per_sec = float(values[22])
         return stats_by_tid
 
 
