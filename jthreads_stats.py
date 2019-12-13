@@ -17,13 +17,22 @@ sample_count = 0
 
 def main():
     global pid
-    parser = create_parser()
-    args = parser.parse_args()
-    pid = args.pid
-    if args.display_type == 'fancy':
-        wrapper(run_fancy_view(Params(args.stack_size, args.number, args.sort_field, args.jstack_enabled)))
-    else:
-        run_terminal_view(Params(args.stack_size, args.number, args.sort_field, args.jstack_enabled))
+    try:
+        parser = create_parser()
+        args = parser.parse_args()
+        pid = args.pid
+        if not check_pid(pid):
+            sys.exit("PID {} not exist".format(pid))
+        params = Params(args.stack_size, args.number, args.sort_field, args.jstack_enabled)
+        java_handler = JavaHotSpotHandler(params.jstack_enabled)
+        sort_description, stats_sorter = StatsSorter.by_field(params.field_sort)
+        title = title_row(java_handler.is_instrumented_java, sort_description)
+        if args.display_type == 'fancy':
+            wrapper(run_fancy_view(params, stats_sorter, java_handler, title))
+        else:
+            run_terminal_view(params, stats_sorter, java_handler, title)
+    except KeyboardInterrupt:
+        pass
 
 
 def create_parser():
@@ -49,17 +58,20 @@ def create_parser():
     return parser
 
 
-def title_row():
-    return "Generating thread stats for Java Process {}".format(pid)
+def title_row(is_instrumented_java, sort_description):
+    if is_instrumented_java:
+        return "Generating thread stats for Process {} (Instrumented Java HotSpot) - {}".format(pid, sort_description)
+    else:
+        return "Generating thread stats for Process {} - {}".format(pid, sort_description)
 
 
-def run_terminal_view(params):
+def run_terminal_view(params, stats_sorter, java_handler, title):
     exc = None
     try:
 
         # print("Generating thread stats for Java Process {}\n\n".format(pid))
-        stats_sorter = StatsSorter.by_field(params.field_sort)
-        call_pidstat(StatsProcessor(params, StatsTerminalPrinter(), stats_sorter))
+        call_pidstat(StatsProcessor(params, StatsTerminalPrinter(title),
+                                    stats_sorter, java_handler))
     except Exception as e:
         exc = traceback.format_exc()
     finally:
@@ -70,7 +82,7 @@ def run_terminal_view(params):
             print(exc)
 
 
-def run_fancy_view(params):
+def run_fancy_view(params, stats_sorter, java_handler, title):
     stdscr = curses.initscr()
     curses.noecho()
     curses.cbreak()
@@ -83,8 +95,8 @@ def run_fancy_view(params):
     exc = None
     try:
         # print("Generating thread stats for Java Process {}\n\n".format(pid))
-        stats_sorter = StatsSorter.by_field(params.field_sort)
-        call_pidstat(StatsProcessor(params, StatsFancyPrinter(stdscr), stats_sorter))
+        call_pidstat(StatsProcessor(params, StatsFancyPrinter(stdscr, title),
+                                    stats_sorter, java_handler))
     except Exception as e:
         exc = traceback.format_exc()
     finally:
@@ -102,6 +114,16 @@ def log_info(msg):
 
 def systat_version():
     return subprocess.getoutput("pidstat -V | cut -d ' ' -f 3 | head -1")
+
+
+def check_pid(pid):
+    """ Check For the existence of a unix pid. """
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    else:
+        return True
 
 
 def call_pidstat(stats_processor):
@@ -142,23 +164,23 @@ class StatsSorter:
     @staticmethod
     def by_field(field):
         if field == "cpu":
-            log_info('sorting by CPU')
-            return lambda x: x.thread_stats.cpu.total_cpu
+            msg = 'Sorting by CPU'
+            return msg, lambda x: x.thread_stats.cpu.total_cpu
         elif field == "rq":
-            log_info('sorting by run queue latency')
-            return lambda x: x.thread_stats.scheduler_stats.delta_run_queue_latency
+            msg = 'Sorting by run-queue latency'
+            return msg, lambda x: x.thread_stats.scheduler_stats.delta_run_queue_latency
         elif field == "disk":
-            log_info('sorting by Disk')
-            return lambda x: x.thread_stats.disk.kb_rd_per_sec + x.thread_stats.disk.kb_wr_per_sec
+            msg = 'Sorting by Disk (read/sec + write/sec)'
+            return msg, lambda x: x.thread_stats.disk.kb_rd_per_sec + x.thread_stats.disk.kb_wr_per_sec
         elif field == "disk-rd":
-            log_info('sorting by Disk')
-            return lambda x: x.thread_stats.disk.kb_rd_per_sec
+            msg = 'Sorting by Disk (read/sec)'
+            return msg, lambda x: x.thread_stats.disk.kb_rd_per_sec
         elif field == "disk-wr":
-            log_info('sorting by Disk')
-            return lambda x: x.thread_stats.disk.kb_wr_per_sec
+            msg = 'Sorting by Disk (write/sec)'
+            return msg, lambda x: x.thread_stats.disk.kb_wr_per_sec
         else:
-            log_info('sorting by default - CPU')
-            return lambda x: x.thread_stats.cpu.total_cpu
+            msg = 'Sorting by default (CPU)'
+            return msg, lambda x: x.thread_stats.cpu.total_cpu
 
 
 class ThreadInfo:
@@ -169,8 +191,10 @@ class ThreadInfo:
         self.dump = dump
         self.thread_stats = thread_stats if thread_stats is not None else ThreadStats(tid)
 
-    def update_dump(self, name, dump):
+    def update_name(self, name):
         self.name = name
+
+    def update_dump(self, dump):
         self.dump = dump
 
 
@@ -237,7 +261,7 @@ class PidStatsParser:
             values = re.split("(\s+)", line)
             # for debugging:
             # log_info("Parsed values: " + "|".join(values))
-            if len(values) >= 18 and values[6].isdigit():
+            if len(values) >= 29 and values[6].isdigit():
                 thread_id = int(values[6])
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.cpu = values[18].rjust(2)
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.user_cpu = float(values[8])
@@ -247,6 +271,7 @@ class PidStatsParser:
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.total_cpu = float(values[16])
                 StatsProcessor.get_thread(thread_id).thread_stats.disk.kb_rd_per_sec = float(values[20])
                 StatsProcessor.get_thread(thread_id).thread_stats.disk.kb_wr_per_sec = float(values[22])
+                StatsProcessor.get_thread(thread_id).update_name(str(values[28]))
         return stats_by_tid
 
 
@@ -254,12 +279,12 @@ class StatsProcessor:
 
     threads = {}
 
-    def __init__(self, params, stats_printer, stats_sorter):
+    def __init__(self, params, stats_printer, stats_sorter, java_hotspot_handler):
         self.max_stack_depth = params.max_stack_depth
         self.top_num = params.top_num
-        self.jstack_enabled = params.jstack_enabled
         self.stats_printer = stats_printer
         self.stats_sorter = stats_sorter
+        self.java_hotspot_handler = java_hotspot_handler
 
     @staticmethod
     def get_thread(tid):
@@ -286,13 +311,14 @@ class StatsProcessor:
                 thread_info.thread_stats.scheduler_stats.update(on_cpu, on_runqueue, timeslices)
 
     def load_stack_info(self, thread_ids, max_stack_depth):
-        if self.jstack_enabled:
-            thread_info_by_id = StatsProcessor.stack_info(thread_ids, max_stack_depth)
-            for tid in thread_ids:
-                thread_dump = thread_info_by_id.get(tid, {})
-                name = thread_dump.get('name', 'no name provided')
-                dump = thread_dump.get('dump', 'no dump provided')
-                StatsProcessor.get_thread(tid).update_dump(name, dump)
+        thread_info_by_id = self.java_hotspot_handler.stack_info(thread_ids, max_stack_depth)
+        for tid in thread_ids:
+            thread_dump = thread_info_by_id.get(tid, {})
+            name = thread_dump.get('name', None)
+            if name is not None:
+                StatsProcessor.get_thread(tid).update_name(name)
+            dump = thread_dump.get('dump', 'no dump provided')
+            StatsProcessor.get_thread(tid).update_dump(dump)
 
     def threads_for_sampling(self, top_num):
         t_sorted = sorted(StatsProcessor.threads.values(), key=self.stats_sorter, reverse=True)
@@ -308,40 +334,61 @@ class StatsProcessor:
         except FileNotFoundError:
             return None, None, None
 
+
+class JavaHotSpotHandler:
+
+    def __init__(self, jstack_enabled):
+        self.is_instrumented_java = self.check_is_instrumented_java()
+        self.jstack_enabled = jstack_enabled
+
     @staticmethod
-    def stack_info(thread_ids, max_stack_depth):
-        thread_set = set(thread_ids)
+    def check_is_instrumented_java():
+        result = False
+        jps_exists = any(os.access(os.path.join(path, "jps"), os.X_OK) for path in os.environ["PATH"].split(os.pathsep))
+        if jps_exists:
+            # jps - q | grep - sq {pid}
+            exit_code, data = subprocess.getstatusoutput("jps -q | grep -sq {}".format(str(pid)))
+            # p1 = subprocess.Popen(["jps", "-q"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            # p2 = subprocess.Popen(["grep", "-s", "-q", str(pid)], stdin=p1.stdout, stderr=subprocess.STDOUT)
+            # result = True if p2.returncode == 0 else False
+            result = True if exit_code == 0 else False
+        return result
+
+    def stack_info(self, thread_ids, max_stack_depth):
         thread_by_tid = {}
-        out = subprocess.Popen(["jstack", str(pid)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        stdout, stderr = out.communicate()
-        thread_dumps = stdout.decode().split(os.linesep + os.linesep)
-        for thread_dump in thread_dumps:
-            if "tid=" in thread_dump:
-                tid_result = re.search("nid=(\w*)", thread_dump)
-                if tid_result is not None:
-                    thread_id = int(tid_result.group(1), 16)
-                    if thread_id in thread_set:
-                        name_search = thread_dump.split('"')
-                        name = name_search[1] if len(name_search) > 0 else "-name not found-"
-                        dump = os.linesep.join(thread_dump.split(os.linesep)[0:(2 + max_stack_depth)])
-                        thread_by_tid[thread_id] = {
-                            'name': name,
-                            'dump': dump,
-                        }
+        if self.jstack_enabled and self.is_instrumented_java:
+            thread_set = set(thread_ids)
+            out = subprocess.Popen(["jstack", str(pid)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            stdout, stderr = out.communicate()
+            thread_dumps = stdout.decode().split(os.linesep + os.linesep)
+            for thread_dump in thread_dumps:
+                if "tid=" in thread_dump:
+                    tid_result = re.search("nid=(\w*)", thread_dump)
+                    if tid_result is not None:
+                        thread_id = int(tid_result.group(1), 16)
+                        if thread_id in thread_set:
+                            name_search = thread_dump.split('"')
+                            name = name_search[1] if len(name_search) > 0 else "-name not found-"
+                            dump = os.linesep.join(thread_dump.split(os.linesep)[0:(2 + max_stack_depth)])
+                            thread_by_tid[thread_id] = {
+                                'name': name,
+                                'dump': dump,
+                            }
         return thread_by_tid
 
 
 class StatsFancyPrinter:
 
-    def __init__(self, stdscr):
+    def __init__(self, stdscr, title):
         self.stdscr = stdscr
+        self.title = title
 
     def display(self, top_n_threads):
         stdscr = self.stdscr
         stdscr.scrollok(1)
         stdscr.idlok(1)
         stdscr.scroll(100)
-        stdscr.addstr(0, 0, title_row(), curses.A_BOLD)
+        stdscr.addstr(0, 0, self.title, curses.A_BOLD)
 
         stdscr.move(2, 0)
 
@@ -465,7 +512,7 @@ class StatsFancyPrinter:
         return "%.1f%s" % (num, ' seconds')
 
 
-class bcolors:
+class BColors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
     OKGREEN = '\033[92m'
@@ -478,14 +525,14 @@ class bcolors:
 
 class StatsTerminalPrinter:
 
-    def __init__(self):
-        pass
+    def __init__(self, title):
+        self.title = title
 
     def display(self, top_n_threads):
         global sample_count
         sample_count += 1
-        print(StatsTerminalPrinter.colored('-------------------------- Sample #{:5d}'.format(sample_count), bcolors.HEADER))
-        print(StatsTerminalPrinter.colored(title_row(), bcolors.HEADER))
+        print(StatsTerminalPrinter.colored('-------------------------- Sample #{:5d}'.format(sample_count), BColors.HEADER))
+        print(StatsTerminalPrinter.colored(self.title, BColors.HEADER))
 
         for tid in top_n_threads:
             self.next_line(StatsProcessor.get_thread(tid))
@@ -494,7 +541,7 @@ class StatsTerminalPrinter:
         print(
             StatsTerminalPrinter.colored(
                 "Thread [tid {} CPU #{}] \"{}\""
-                .format(thread_info.tid, thread_info.thread_stats.cpu.cpu, thread_info.name), bcolors.BOLD))
+                .format(thread_info.tid, thread_info.thread_stats.cpu.cpu, thread_info.name), BColors.BOLD))
 
         print("CPU ", end='')
         print(StatsTerminalPrinter.colored("{:3.2f}%".format(thread_info.thread_stats.cpu.total_cpu),
@@ -537,34 +584,34 @@ class StatsTerminalPrinter:
 
     @staticmethod
     def colored(text, color):
-        return "{}{}{}".format(color, text, bcolors.ENDC)
+        return "{}{}{}".format(color, text, BColors.ENDC)
 
     @staticmethod
     def cpu_color(value):
         if value < 20:
-            return bcolors.OKGREEN
+            return BColors.OKGREEN
         elif value < 60:
-            return bcolors.WARNING
+            return BColors.WARNING
         else:
-            return bcolors.FAIL
+            return BColors.FAIL
 
     @staticmethod
     def latency_color(value):
         if value < 10000:  # 10 microseconds
-            return bcolors.OKGREEN
+            return BColors.OKGREEN
         elif value < 1000000:  # 1 millis
-            return bcolors.WARNING
+            return BColors.WARNING
         else:
-            return bcolors.FAIL
+            return BColors.FAIL
 
     @staticmethod
     def io_color(value):
         if value < 20:
-            return bcolors.OKGREEN
+            return BColors.OKGREEN
         elif value < 100:
-            return bcolors.WARNING
+            return BColors.WARNING
         else:
-            return bcolors.FAIL
+            return BColors.FAIL
 
     @staticmethod
     def sizeof_fmt(num, suffix='B'):
