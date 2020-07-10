@@ -15,7 +15,7 @@ On each iteration, the following stats are displayed:
 * `Python 3`
 * [systat]
 
-It's only be used on `linux` platform.
+It's can be used only on `linux` platform.
 
 ### Usage
 
