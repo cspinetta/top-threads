@@ -27,8 +27,8 @@ def main():
         java_handler = JavaHotSpotHandler(params.jstack_enabled)
         sort_description, stats_sorter = StatsSorter.by_field(params.field_sort)
         title = title_row(java_handler.is_instrumented_java, sort_description)
-        if args.display_type == 'fancy':
-            wrapper(run_fancy_view(params, stats_sorter, java_handler, title))
+        if args.display_type == 'refresh':
+            wrapper(run_refresh_view(params, stats_sorter, java_handler, title))
         else:
             run_terminal_view(params, stats_sorter, java_handler, title)
     except KeyboardInterrupt:
@@ -36,13 +36,13 @@ def main():
 
 
 def create_parser():
-    parser = argparse.ArgumentParser(description='Process for analysing Java Threads')
+    parser = argparse.ArgumentParser(description='Process for analysing active Threads')
     parser.add_argument('-p', required=True,
                         type=int, dest='pid',
                         help='Process ID')
     parser.add_argument('-n', nargs='?', dest='number',
                         type=int, default=10,
-                        help='Number of threads to show by sample')
+                        help='Number of threads to show per sample')
     parser.add_argument('--max-stack-depth', '-m', nargs='?',
                         type=int, default=1, dest='stack_size',
                         help='Max number of stack frames')
@@ -50,8 +50,8 @@ def create_parser():
                         choices=['cpu', 'rq', 'disk', 'disk-rd', 'disk-wr'], default='cpu',
                         help='field used for sorting')
     parser.add_argument('--display', '-d', nargs='?', dest='display_type',
-                        choices=['terminal', 'fancy'], default='terminal',
-                        help='Select the way to display the info: terminal or fancy')
+                        choices=['terminal', 'refresh'], default='terminal',
+                        help='Select the way to display the info: terminal or refresh')
     parser.add_argument('--no-jstack', dest='jstack_enabled',
                         action="store_false",
                         help='Turn off usage of jstack to retrieve thread info like name and stack')
@@ -82,7 +82,7 @@ def run_terminal_view(params, stats_sorter, java_handler, title):
             print(exc)
 
 
-def run_fancy_view(params, stats_sorter, java_handler, title):
+def run_refresh_view(params, stats_sorter, java_handler, title):
     stdscr = curses.initscr()
     curses.noecho()
     curses.cbreak()
@@ -95,7 +95,7 @@ def run_fancy_view(params, stats_sorter, java_handler, title):
     exc = None
     try:
         # print("Generating thread stats for Java Process {}\n\n".format(pid))
-        call_pidstat(StatsProcessor(params, StatsFancyPrinter(stdscr, title),
+        call_pidstat(StatsProcessor(params, StatsRefreshPrinter(stdscr, title),
                                     stats_sorter, java_handler))
     except Exception as e:
         exc = traceback.format_exc()
@@ -132,7 +132,7 @@ def call_pidstat(stats_processor):
     pidstat_env['S_COLORS'] = "never"
     version = systat_version().split('.')
     fix_time_display = []
-    if len(version) > 1 and int(version[0]) >= 11 and int(version[1]) >= 6:
+    if len(version) > 1 and ((int(version[0]) >= 11 and int(version[1]) >= 6) or int(version[0]) >= 11):
         fix_time_display.append("-H")
     args = ["pidstat", "-u", "-d", "-t", "-h"] + fix_time_display + ["-p", str(pid), "1"]
     process = subprocess.Popen(args,
@@ -242,9 +242,9 @@ class SchedulerStats:
         if on_runqueue < self.run_queue_latency:
             log_info("TID: {}, on_runqueue {} -> {} (received: {})"
                      .format(self.tid,
-                             StatsFancyPrinter.nanos_fmt(self.run_queue_latency),
-                             StatsFancyPrinter.nanos_fmt(on_runqueue - self.run_queue_latency),
-                             StatsFancyPrinter.nanos_fmt(on_runqueue)))
+                             StatsRefreshPrinter.nanos_fmt(self.run_queue_latency),
+                             StatsRefreshPrinter.nanos_fmt(on_runqueue - self.run_queue_latency),
+                             StatsRefreshPrinter.nanos_fmt(on_runqueue)))
         self.delta_spent_on_cpu = on_cpu - self.spent_on_cpu
         self.spent_on_cpu = on_cpu
         self.delta_run_queue_latency = on_runqueue - self.run_queue_latency
@@ -377,7 +377,7 @@ class JavaHotSpotHandler:
         return thread_by_tid
 
 
-class StatsFancyPrinter:
+class StatsRefreshPrinter:
 
     def __init__(self, stdscr, title):
         self.stdscr = stdscr
@@ -438,8 +438,8 @@ class StatsFancyPrinter:
         stdscr.addstr(", run-queue latency: ")
         stdscr.addstr("{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)),
                       self.latency_color(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency))
-        stdscr.addstr(", timeslices in current CPU: ")
-        stdscr.addstr("{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.timeslices_on_current_cpu)))
+        stdscr.addstr(", # of timeslices run in current CPU: ")
+        stdscr.addstr("{}".format(thread_info.thread_stats.scheduler_stats.timeslices_on_current_cpu))
         stdscr.addstr("]")
         stdscr.addstr(os.linesep)
 
@@ -447,7 +447,7 @@ class StatsFancyPrinter:
         if position >= max_lines:
             return position
 
-        stdscr.addstr("I/O [kB_rd/s: ")
+        stdscr.addstr("I/O disk [kB_rd/s: ")
         stdscr.addstr("{}".format(thread_info.thread_stats.disk.kb_rd_per_sec),
                       self.io_color(thread_info.thread_stats.disk.kb_rd_per_sec))
         stdscr.addstr(", kB_wr/s: ")
@@ -564,11 +564,11 @@ class StatsTerminalPrinter:
         print(StatsTerminalPrinter.colored(
             "{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)),
             self.latency_color(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)), end='')
-        print(", timeslices in current CPU: ", end='')
-        print("{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.timeslices_on_current_cpu)), end='')
+        print(", # of timeslices run in current CPU: ", end='')
+        print("{}".format(thread_info.thread_stats.scheduler_stats.timeslices_on_current_cpu), end='')
         print("]")
 
-        print("I/O [kB_rd/s: ", end='')
+        print("I/O disk [kB_rd/s: ", end='')
         print(StatsTerminalPrinter.colored("{}".format(thread_info.thread_stats.disk.kb_rd_per_sec),
                                           self.io_color(thread_info.thread_stats.disk.kb_rd_per_sec)), end='')
         print(", kB_wr/s: ", end='')
