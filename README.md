@@ -17,13 +17,20 @@ On each iteration, the following stats are displayed:
 
 It's can be used only on `linux` platform.
 
+## Quick start
+
+```bash
+wget -O top_threads.py 'https://raw.githubusercontent.com/cspinetta/top-threads/master/top_threads.py' \
+  && chmod +x top_threads.py
+```
+
 ### Usage
 
 ```bash
-usage: threads_stats.py [-h] -p PID [-n [NUMBER]]
-                        [--max-stack-depth [STACK_SIZE]]
-                        [--sort [{cpu,rq,disk,disk-rd,disk-wr}]]
-                        [--display [{terminal,refresh}]] [--no-jstack]
+usage: top_threads.py [-h] -p PID [-n [NUMBER]]
+                      [--max-stack-depth [STACK_SIZE]]
+                      [--sort [{cpu,rq,disk,disk-rd,disk-wr}]]
+                      [--display [{terminal,refresh}]] [--no-jstack]
 
 Process for analysing active Threads
 
@@ -40,6 +47,7 @@ optional arguments:
                         refresh
   --no-jstack           Turn off usage of jstack to retrieve thread info like
                         name and stack
+
 ```
 
 **Notes:**
