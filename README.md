@@ -17,7 +17,7 @@ On each iteration, the following stats are displayed:
 
 It's can be used only on `linux` platform.
 
-## Quick start
+### Quick start
 
 ```bash
 wget -O top_threads.py 'https://raw.githubusercontent.com/cspinetta/top-threads/master/top_threads.py' \
