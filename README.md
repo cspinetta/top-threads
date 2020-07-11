@@ -1,14 +1,17 @@
 # Top Threads
 
 A tiny command line tool that provides a dynamic real-time view of the active threads for a given process with stats of CPU, disk and scheduling.
-The view is similar to `top`, but the information comes from [pidstat] (provided by [systat]) and [/proc/<pid>/schedstat] (and from the [jstack] Oracle tool in case an attachable java process).
+
+The information comes from [pidstat] (provided by [systat]) and [/proc/{pid}/schedstat]. Also if the [jstack] Oracle tool can be used some additional information is extracted such as thread name and stack trace.
+
+The output can be viewed in full screen (similar to `top` or `watch`) or it can be printed on the terminal.
 
 On each iteration, the following stats are displayed:
 
 * CPU usage: _total_, _%usr_, _%system_, _%guest_ and _%wait_
 * Disk usege: kB read per second and kB written per second
 * Scheduler stats: time spent on the cpu, time spent waiting on a run queue (_runqueue latency_) and number of timeslices run on the current CPU.
-* Java details: in case a the target is a Java process that can be attached with `jstack`, some extra details is showed such as thread name and stack traces.
+* Java details: in case the target is a Java process that can be attached with `jstack`, some extra details is showed such as thread name and stack traces.
 
 ### Requirements
 
@@ -23,6 +26,26 @@ It's can be used only on `linux` platform.
 wget -O top_threads.py 'https://raw.githubusercontent.com/cspinetta/top-threads/master/top_threads.py' \
   && chmod +x top_threads.py
 ```
+
+#### Examples:
+
+```bash
+# watch <pid>'s threads with default values
+./top_threads.py -p <pid>
+
+# showing output fullscreen (like `top` or `watch`)
+./top_threads.py -p <pid> --display refresh
+
+# sorting by run queue latency
+./top_threads.py -p <pid> --sort rq
+
+# in case a java process, change the number of stack traces to display
+./top_threads.py -p <pid> --max-stack-depth 10
+```
+
+**Notes:**
+* The first sample is with stats from the first execution of the process.
+* `--display refresh` provides a view similar to `top` or `watch` while `terminal` (the default) prints the data on the terminal like `pidstat`.
 
 ### Usage
 
@@ -50,18 +73,14 @@ optional arguments:
 
 ```
 
-**Notes:**
-* The first sample is with stats from the first execution of the process.
-* `--display refresh` provides a view similar to `top` while `terminal` (the default) prints the data on the terminal like `pidstat`.
-
 ### Motivation
 
 This tool comes from the need to want to see the time each thread spends in the runqueue waiting to be able to start running.
 That is a really useful metric to understand if the process is being slow down because the CPU is saturated.
-For this reason this tool emerged. It gets information from [pidstat], [/proc/<pid>/schedstat] and [jstack]:
+For this reason this tool emerged. It gets information from [pidstat], [/proc/{pid}/schedstat] and [jstack]:
 
 * [pidstat] to get cpu and disk usage metrics from each thread in time interval.
-* [/proc/<pid>/schedstat] to gets metrics from the runqueue. 
+* [/proc/{pid}/schedstat] to gets metrics from the runqueue. 
 * [jstack] is used in case the process that is beaing monitored is an attachable java process, to obtain information such as thread name and stack traces.
 
 ### What is a good use case for this tool?
@@ -90,7 +109,7 @@ In case you suspect you are being limited by a CPU saturation, you may look for 
 
 ![Top Java Threads Refresh](docs/top_java_threads_refresh.png)
 
-[/proc/<pid>/schedstat]: https://www.kernel.org/doc/html/latest/scheduler/sched-stats.html#proc-pid-schedstat
+[/proc/{pid}/schedstat]: https://www.kernel.org/doc/html/latest/scheduler/sched-stats.html#proc-pid-schedstat
 [systat]: https://github.com/sysstat/sysstat
 [pidstat]: https://linux.die.net/man/1/pidstat
 [jstack]: https://docs.oracle.com/javase/9/tools/jstack.htm#JSWOR748
