@@ -2,7 +2,7 @@
 
 A tiny command line tool that provides a dynamic real-time view of the active threads for a given process with stats of CPU, disk and scheduling.
 
-The information comes from [pidstat] (provided by [systat]) and [/proc/{pid}/schedstat]. Also if the [jstack] Oracle tool can be used some additional information is extracted such as thread name and stack trace.
+The information comes from [pidstat] (provided by [systat]) and [/proc/{pid}/schedstat]. Also if the target process is a java process and the [jstack] Oracle tool is available it will try to use it to extract additional information such as thread name and stack trace.
 
 The output can be viewed in full screen (similar to `top` or `watch`) or it can be printed on the terminal.
 
@@ -33,19 +33,22 @@ wget -O top_threads.py 'https://raw.githubusercontent.com/cspinetta/top-threads/
 # watch <pid>'s threads with default values
 ./top_threads.py -p <pid>
 
-# showing output fullscreen (like `top` or `watch`)
-./top_threads.py -p <pid> --display refresh
+# print output in the terminal
+./top_threads.py -p <pid> --display terminal
 
 # sorting by run queue latency
 ./top_threads.py -p <pid> --sort rq
 
 # in case a java process, change the number of stack traces to display
 ./top_threads.py -p <pid> --max-stack-depth 10
+
+# enable debug log for troubleshooting
+./top_threads.py -p <pid> --debug
 ```
 
 **Notes:**
-* The first sample is with stats from the first execution of the process.
-* `--display refresh` provides a view similar to `top` or `watch` while `terminal` (the default) prints the data on the terminal like `pidstat`.
+* The first output is with stats from the first execution of the process.
+* `--display refresh` provides a view similar to `top` or `watch` (the default) while `terminal` prints the output on each iteration in the terminal like `pidstat`.
 
 ### Usage
 
@@ -53,23 +56,25 @@ wget -O top_threads.py 'https://raw.githubusercontent.com/cspinetta/top-threads/
 usage: top_threads.py [-h] -p PID [-n [NUMBER]]
                       [--max-stack-depth [STACK_SIZE]]
                       [--sort [{cpu,rq,disk,disk-rd,disk-wr}]]
-                      [--display [{terminal,refresh}]] [--no-jstack]
+                      [--display [{terminal,refresh}]] [--no-jstack] [--debug]
 
-Process for analysing active Threads
+Tool for analysing active Threads
 
 optional arguments:
   -h, --help            show this help message and exit
   -p PID                Process ID
-  -n [NUMBER]           Number of threads to show per sample
+  -n [NUMBER]           Number of threads to show per sample. Default: 10
   --max-stack-depth [STACK_SIZE], -m [STACK_SIZE]
-                        Max number of stack frames
+                        Max number of stack frames (only when jstack can be
+                        used). Default: 1
   --sort [{cpu,rq,disk,disk-rd,disk-wr}], -s [{cpu,rq,disk,disk-rd,disk-wr}]
-                        field used for sorting
+                        Field used for sorting. Default: cpu
   --display [{terminal,refresh}], -d [{terminal,refresh}]
                         Select the way to display the info: terminal or
-                        refresh
+                        refresh. Default: refresh
   --no-jstack           Turn off usage of jstack to retrieve thread info like
                         name and stack
+  --debug               Turn on logs for debugging purposes
 
 ```
 
@@ -101,13 +106,13 @@ In case you suspect you are being limited by a CPU saturation, you may look for 
 
 ### Example in pictures
 
-* With `--display terminal` (the default):
+* With `--display refresh` (the default):
+
+![Top Java Threads Refresh](docs/top_threads_refresh_view.png)
+
+* With `--display terminal`:
 
 ![Top Java Threads in Terminal](docs/top_java_threads_terminal.png)
-
-* With `--display refresh`:
-
-![Top Java Threads Refresh](docs/top_java_threads_refresh.png)
 
 [/proc/{pid}/schedstat]: https://www.kernel.org/doc/html/latest/scheduler/sched-stats.html#proc-pid-schedstat
 [systat]: https://github.com/sysstat/sysstat

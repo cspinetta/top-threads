@@ -53,7 +53,7 @@ def main():
         # it's safe to use logging here because the curses window has been closed
         logging.exception("unexpected exception")
     finally:
-        if log is not '':
+        if len(log) > 0:
             print("\nExecution log:\n")
         print("\n".join(log))
 
