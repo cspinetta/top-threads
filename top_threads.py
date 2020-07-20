@@ -19,6 +19,7 @@ log = []
 script_pid = os.getpid()
 pid = 0
 debug_enabled = False
+trace_enabled = False
 systat_version = None
 kind_systat_version = SYSTAT_VERSION_NEW
 
@@ -122,6 +123,11 @@ def log_debug(msg):
         log.append("{} | DEBUG | {}".format(datetime.datetime.now(), msg))
 
 
+def log_trace(msg):
+    if trace_enabled:
+        log.append("{} | TRACE | {}".format(datetime.datetime.now(), msg))
+
+
 def get_systat_version():
     return subprocess.getoutput("pidstat -V | cut -d ' ' -f 3 | head -1")
 
@@ -162,6 +168,7 @@ def call_pidstat(stats_processor):
     if kind_systat_version == SYSTAT_VERSION_NEW:
         fix_time_display.append("-H")
     args = ["pidstat", "-u", "-d", "-t", "-h"] + fix_time_display + ["-p", str(pid), "1"]
+    log_debug("pidstat command: {}".format(" ".join(args)))
     process = subprocess.Popen(args,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE,
@@ -267,26 +274,37 @@ class ThreadDiskStats:
 class SchedulerStats:
 
     def __init__(self, tid):
-        self.tid = tid
-        self.spent_on_cpu = 0
-        self.run_queue_latency = 0
-        self.timeslices_on_current_cpu = 0
+        self.__tid = tid
+
+        self.__spent_on_cpu = 0
+        self.__run_queue_latency = 0
+        self.__timeslices_on_current_cpu = 0
+
         self.delta_spent_on_cpu = 0
         self.delta_run_queue_latency = 0
         self.delta_timeslices_on_current_cpu = 0
 
     def update(self, on_cpu, on_runqueue, timeslices):
-        if on_runqueue < self.run_queue_latency:
-            log_debug("TID: {}, on_runqueue {} -> {} (received: {})"
-                      .format(self.tid,
-                              StatsRefreshPrinter.nanos_fmt(self.run_queue_latency),
-                              StatsRefreshPrinter.nanos_fmt(on_runqueue - self.run_queue_latency),
-                              StatsRefreshPrinter.nanos_fmt(on_runqueue)))
-        self.delta_spent_on_cpu = on_cpu - self.spent_on_cpu
-        self.spent_on_cpu = on_cpu
-        self.delta_run_queue_latency = on_runqueue - self.run_queue_latency
-        self.run_queue_latency = on_runqueue
-        self.timeslices_on_current_cpu = timeslices
+        log_trace("TID: {}, on_runqueue {} -> {} (received: {})"
+                  .format(self.__tid,
+                          StatsRefreshPrinter.nanos_fmt(self.__run_queue_latency),
+                          StatsRefreshPrinter.nanos_fmt(on_runqueue - self.__run_queue_latency),
+                          StatsRefreshPrinter.nanos_fmt(on_runqueue)))
+
+        new_delta_timeslices = timeslices - self.__timeslices_on_current_cpu
+
+        if new_delta_timeslices > 0:
+            self.delta_spent_on_cpu = (on_cpu - self.__spent_on_cpu) / new_delta_timeslices
+            self.delta_run_queue_latency = (on_runqueue - self.__run_queue_latency) / new_delta_timeslices
+            self.delta_timeslices_on_current_cpu = new_delta_timeslices
+        else:
+            self.delta_spent_on_cpu = 0
+            self.delta_run_queue_latency = 0
+            self.delta_timeslices_on_current_cpu = new_delta_timeslices
+
+        self.__spent_on_cpu = on_cpu
+        self.__run_queue_latency = on_runqueue
+        self.__timeslices_on_current_cpu = timeslices
 
 
 class PidStatsParser:
@@ -589,18 +607,18 @@ class StatsRefreshPrinter:
         new_line.append(ChunkText(", %wait: "))
         new_line.append(ChunkText("{:3.2f}".format(thread_info.thread_stats.cpu.wait_cpu),
                                   StatsRefreshPrinter.cpu_color(thread_info.thread_stats.cpu.wait_cpu)))
-        new_line.append(ChunkText("] [spent in CPU: "))
+        new_line.append(ChunkText("] [avg. time spent in CPU: "))
         new_line.append(
             ChunkText("{}".format(
                 StatsRefreshPrinter.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_spent_on_cpu))))
-        new_line.append(ChunkText(", run-queue latency: "))
+        new_line.append(ChunkText(", avg. run-queue latency: "))
         new_line.append(
             ChunkText("{}".format(
                 StatsRefreshPrinter.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)),
                 StatsRefreshPrinter.latency_color(
                     thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)))
         new_line.append(ChunkText(", # of timeslices run in current CPU: "))
-        new_line.append(ChunkText("{}".format(thread_info.thread_stats.scheduler_stats.timeslices_on_current_cpu)))
+        new_line.append(ChunkText("{}".format(thread_info.thread_stats.scheduler_stats.delta_timeslices_on_current_cpu)))
         new_line.append(ChunkText("]"))
 
         lines.append(new_line)
@@ -726,14 +744,14 @@ class StatsTerminalPrinter:
         print(", %wait: ", end='')
         print(StatsTerminalPrinter.colored("{:3.2f}".format(thread_info.thread_stats.cpu.wait_cpu),
                                            self.cpu_color(thread_info.thread_stats.cpu.wait_cpu)), end='')
-        print("] [spent in CPU: ", end='')
+        print("] [avg. time spent in CPU: ", end='')
         print("{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_spent_on_cpu)), end='')
-        print(", run-queue latency: ", end='')
+        print(", avg. run-queue latency: ", end='')
         print(StatsTerminalPrinter.colored(
             "{}".format(self.nanos_fmt(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)),
             self.latency_color(thread_info.thread_stats.scheduler_stats.delta_run_queue_latency)), end='')
         print(", # of timeslices run in current CPU: ", end='')
-        print("{}".format(thread_info.thread_stats.scheduler_stats.timeslices_on_current_cpu), end='')
+        print("{}".format(thread_info.thread_stats.scheduler_stats.delta_timeslices_on_current_cpu), end='')
         print("]")
 
         print("I/O disk [kB_rd/s: ", end='')
