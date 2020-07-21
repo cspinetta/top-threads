@@ -343,7 +343,7 @@ class PidStatsParser:
             values = re.split("(\s+)", line)
             # for debugging:
             # log_debug("Parsed values: " + "|".join(values))
-            if len(values) >= 27 and values[6].isdigit():
+            if len(values) >= 27 and values[6].isdigit() and int(values[6]) != 0:
                 thread_id = int(values[6])
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.cpu = values[18].rjust(2)
                 StatsProcessor.get_thread(thread_id).thread_stats.cpu.user_cpu = float(values[8])
@@ -427,11 +427,7 @@ class JavaHotSpotHandler:
         result = False
         jps_exists = any(os.access(os.path.join(path, "jps"), os.X_OK) for path in os.environ["PATH"].split(os.pathsep))
         if jps_exists:
-            # jps - q | grep - sq {pid}
             exit_code, data = subprocess.getstatusoutput("jps -q | grep -sq {}".format(str(pid)))
-            # p1 = subprocess.Popen(["jps", "-q"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            # p2 = subprocess.Popen(["grep", "-s", "-q", str(pid)], stdin=p1.stdout, stderr=subprocess.STDOUT)
-            # result = True if p2.returncode == 0 else False
             result = True if exit_code == 0 else False
         return result
 
