@@ -23,7 +23,7 @@ It's can be used only on `linux` platform.
 ### Quick start
 
 ```bash
-wget -O top_threads.py 'https://raw.githubusercontent.com/cspinetta/top-threads/master/top_threads.py' \
+wget -O top_threads.py 'https://github.com/cspinetta/top-threads/releases/download/0.0.1/top_threads.py' \
   && chmod +x top_threads.py
 ```
 
